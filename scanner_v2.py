@@ -1,4 +1,4 @@
-# ============================================================
+ # ============================================================
 # KORIVA CRYPTO SCANNER V2.1
 # Binance USDT-M Perpetual Futures
 # Public API - No API key required
@@ -20,13 +20,6 @@
 # relative volume, trend and RSI are used. The maximum is
 # normalized to 100 for comparability but must not be
 # interpreted as identical to the live score.
-#
-# Two scores, two names:
-#   - live score      -> LIVE ACTIVITY score      (0-100)
-#   - backtest score  -> BACKTEST TECHNICAL score (0-100)
-# The JSON field is still named "score" for backward
-# compatibility; the top-level key "score_field_description"
-# clarifies which score it is in each context.
 # ============================================================
 
 import argparse
@@ -62,11 +55,6 @@ BACKTEST_STEP = 4        # 1h between samples
 OI_WINDOW_PERIOD = "5m"
 OI_WINDOW_LIMIT = 6
 OI_WINDOW_SPAN_MIN = (OI_WINDOW_LIMIT - 1) * 5   # 25
-
-# Minimum number of directional samples required before the
-# score/return correlation is reported. Below this threshold
-# the coefficient is statistically meaningless.
-MIN_SAMPLES_FOR_CORRELATION = 30
 
 # Global verbosity (set by argparse)
 VERBOSE = True
@@ -108,20 +96,6 @@ if PROXY_URL:
     log(f"[KORIVA] Proxy enabled -> {_safe_proxy}")
 else:
     log("[KORIVA] No proxy configured (using direct connection).")
-
-
-def _is_fatal_http_error(err):
-    """
-    True if the HTTPError corresponds to a fatal deployment
-    condition (IP ban or geo-block) that must not be silently
-    swallowed by high-level helpers.
-
-    A silent None on these errors would hide a whole-scan
-    failure (e.g. every OI / funding value missing) behind a
-    'working' scan output.
-    """
-    s = str(err)
-    return ("418" in s) or ("451" in s)
 
 
 def get_json(endpoint, params=None, max_retries=5):
@@ -169,16 +143,15 @@ def get_json(endpoint, params=None, max_retries=5):
             )
 
         # ----- Geo-block (fatal) -----
-        # Binance may return HTTP 451 when the runner's IP/region
-        # is restricted for the requested endpoint. A proxy or a
-        # non-restricted runner region is the documented workaround.
+        # Binance returns 451 from US IPs (GitHub Actions runners
+        # are US-based). A proxy or a non-US runner is required.
         if response.status_code == 451:
             raise requests.HTTPError(
                 f"451 Geo-blocked by Binance for {endpoint}: "
-                f"this IP/region is restricted for the requested "
-                f"endpoint (HTTP 451). Configure BINANCE_PROXY with "
-                f"a permitted egress, or use a self-hosted runner in "
-                f"a non-restricted region. Body: {response.text[:200]}"
+                f"this IP is in a restricted region (HTTP 451). "
+                f"Configure BINANCE_PROXY with a non-US proxy, "
+                f"or use a self-hosted runner outside the US. "
+                f"Body: {response.text[:200]}"
             )
 
         # ----- Server errors -----
@@ -227,12 +200,8 @@ def get_klines(symbol, interval="15m", limit=KLINES_LIMIT):
 def get_funding_rate(symbol):
     """
     Latest funding rate (%) or None if unavailable.
-
     Returning None (not 0.0) is important: missing data must
     contribute 0 score points, not the 'low funding' bonus.
-
-    HTTP 418/451 are re-raised because they indicate a
-    deployment-level failure, not a per-symbol data gap.
     """
     try:
         data = get_json(
@@ -242,27 +211,15 @@ def get_funding_rate(symbol):
         if not data:
             return None
         return float(data[-1]["fundingRate"]) * 100
-    except requests.HTTPError as e:
-        if _is_fatal_http_error(e):
-            raise
-        return None
     except Exception:
         return None
 
 
 def get_open_interest(symbol):
-    """
-    Open interest or None if unavailable.
-
-    HTTP 418/451 are re-raised (deployment-level failure).
-    """
+    """Open interest or None if unavailable."""
     try:
         data = get_json("/fapi/v1/openInterest", {"symbol": symbol})
         return float(data["openInterest"])
-    except requests.HTTPError as e:
-        if _is_fatal_http_error(e):
-            raise
-        return None
     except Exception:
         return None
 
@@ -271,17 +228,7 @@ def get_open_interest_history(symbol):
     """
     Recent OI % change over the fetched window.
 
-    Endpoint (verified against Binance USDⓈ-M Futures public
-    REST API documentation):
-        GET /futures/data/openInterestHist
-        Params: symbol=<USDT-M perpetual>, period=5m, limit=6
-        Response fields: sumOpenInterest, sumOpenInterestValue,
-                         timestamp
-    Both period=5m and limit=6 are valid for this endpoint.
-    The base host for this endpoint is fapi.binance.com
-    (USDT-M), not dapi.binance.com (COIN-M).
-
-    WINDOW SPAN:
+    NOTE ON WINDOW SPAN:
         period = "5m", limit = 6.
         The first-to-last observation therefore spans
         (6 - 1) * 5 = 25 minutes, NOT 30 minutes.
@@ -290,8 +237,6 @@ def get_open_interest_history(symbol):
 
     Returns None (not 0.0) when unavailable so missing data
     contributes 0 score points instead of a neutral value.
-
-    HTTP 418/451 are re-raised (deployment-level failure).
     """
     try:
         data = get_json(
@@ -306,10 +251,6 @@ def get_open_interest_history(symbol):
         if old_oi <= 0:
             return None
         return (new_oi - old_oi) / old_oi * 100
-    except requests.HTTPError as e:
-        if _is_fatal_http_error(e):
-            raise
-        return None
     except Exception:
         return None
 
@@ -319,22 +260,6 @@ def get_open_interest_history(symbol):
 # ============================================================
 
 def calculate_rsi(close, period=14):
-    """
-    SMA-based RSI (NOT Wilder / RMA smoothing).
-
-    Average gain and average loss use a simple rolling mean.
-    This is internally consistent and safe, but differs from
-    TradingView and Binance chart RSI, which use Wilder's
-    smoothing (RMA, i.e. EMA with alpha = 1/period). Values
-    produced here are therefore not expected to match those
-    references exactly.
-
-    The scoring thresholds in _subscore_rsi() are calibrated
-    to THIS implementation and must not be changed without
-    recalibrating those thresholds.
-
-    Returns 50.0 when there is not enough data (neutral).
-    """
     delta = close.diff()
     gains = delta.clip(lower=0)
     losses = -delta.clip(upper=0)
@@ -616,16 +541,12 @@ BACKTEST_SUBSCORE_MAX = 75
 
 def calculate_live_score(row):
     """
-    LIVE ACTIVITY score /100 (not a directional prediction):
+    Live score /100:
         momentum (20) + RV (20) + trend (20) + RSI (15)
         + OI (15) + funding (10)
 
     Missing OI or funding contributes 0 points (NOT a neutral
     value that would trigger the 'low funding' bonus).
-
-    This is DIFFERENT from calculate_backtest_score(), which is
-    a technical-only score built from momentum + RV + trend +
-    RSI, rescaled to 100. Do not compare the two numerically.
     """
     score = 0
     score += _subscore_momentum(row)
@@ -661,19 +582,17 @@ def calculate_live_score(row):
 
 def calculate_backtest_score(row):
     """
-    BACKTEST TECHNICAL score on a 0-100 scale, built ONLY from
-    features genuinely available historically:
+    Backtest score on a 0-100 scale, built ONLY from features
+    genuinely available historically:
         momentum (20) + RV (20) + trend (20) + RSI (15)
     The 75-point sum is rescaled to 100.
 
-    This is NOT the same as the LIVE ACTIVITY score:
+    This is NOT the same as the live score:
       - Historical OI is not available via the public API.
       - Historical funding is not available via the public API.
     So the backtest intentionally omits those two components
     rather than faking them with 0.0, which would have given
     every sample the 'low funding' bonus.
-
-    Do not compare this number numerically to the live score.
     """
     sub = (
         _subscore_momentum(row)
@@ -858,14 +777,6 @@ def backtest(symbols, horizon=BACKTEST_HORIZON, step=BACKTEST_STEP):
     """
     Walk-forward backtest with strict time alignment.
 
-    SCOPE (intentional, do not redesign):
-        This backtest evaluates the CURRENTLY selected top-N
-        symbols returned by the live scanner. It does NOT
-        reconstruct historical Binance-wide symbol selection.
-        Results reflect the historical behavior of symbols
-        that are today's top performers, which is a
-        selection bias and must be interpreted accordingly.
-
     For each symbol:
       for signal index i in [60, n - horizon - 1]:
           features  = compute_features(df, closed_idx=i)
@@ -883,16 +794,15 @@ def backtest(symbols, horizon=BACKTEST_HORIZON, step=BACKTEST_STEP):
 
     No future data is used to compute indicators, direction or
     score. Entry stays at the signal candle close: this is a
-    research baseline, not a conservative execution simulator features
+    research baseline, not a conservative execution simulator
     (no slippage, no fees, no next-open entry).
     """
     records = []
 
-    log["()
+    log()
     log("=" * 100)
-    log(f"  BACKrelativeTEST - {len(symbols)} symbols, "
-        f"horizon {horizon} candles (~{horizon_ * 15volume / 60:.0f}h),"],
- "
+    log(f"  BACKTEST - {len(symbols)} symbols, "
+        f"horizon {horizon} candles (~{horizon * 15 / 60:.0f}h), "
         f"step {step} candles")
     log("=" * 100)
 
@@ -944,7 +854,8 @@ def backtest(symbols, horizon=BACKTEST_HORIZON, step=BACKTEST_STEP):
                     "forward_return": forward_return,
                     "signal_return": signal_return,
                     "momentum_1h": features["momentum_1h"],
-                    "relative_volume":                    "rsi": features["rsi"],
+                    "relative_volume": features["relative_volume"],
+                    "rsi": features["rsi"],
                 })
 
             time.sleep(0.1)
@@ -991,4 +902,374 @@ def summarize_backtest(bt_df, horizon):
     neut = df[df["direction"] == "NEUTRAL"]
     directional = df[df["direction"].isin(["BULLISH", "BEARISH"])]
 
-    def _stats
+    def _stats(sub, col="signal_return"):
+        if sub.empty:
+            return {
+                "count": 0,
+                "avg": None,
+                "median": None,
+                "win_rate": None,
+                "std": None,
+            }
+        return {
+            "count": int(len(sub)),
+            "avg": float(sub[col].mean()),
+            "median": float(sub[col].median()),
+            "win_rate": float((sub[col] > 0).mean() * 100),
+            "std": float(sub[col].std()) if len(sub) > 1 else 0.0,
+        }
+
+    # Score buckets on directional samples only (neutral samples
+    # have signal_return = 0 by construction and would bias buckets).
+    bins = [0, 20, 40, 60, 80, 100]
+    labels = ["0-20", "20-40", "40-60", "60-80", "80-100"]
+
+    buckets = []
+    if not directional.empty:
+        directional = directional.copy()
+        directional["bucket"] = pd.cut(
+            directional["score"],
+            bins=bins,
+            labels=labels,
+            include_lowest=True,
+        )
+        for label in labels:
+            buckets.append(
+                _bucket_stats(directional[directional["bucket"] == label],
+                              label)
+            )
+    else:
+        for label in labels:
+            buckets.append(_bucket_stats(pd.DataFrame(), label))
+
+    # Correlation between score and directional signal return.
+    corr = None
+    if len(directional) >= 3:
+        c = directional["score"].corr(directional["signal_return"])
+        if pd.notna(c):
+            corr = float(c)
+
+    return {
+        "horizon_candles": horizon,
+        "horizon_hours": horizon * 15 / 60,
+        "total_samples": int(len(df)),
+        "bullish_samples": int(len(bull)),
+        "bearish_samples": int(len(bear)),
+        "neutral_samples": int(len(neut)),
+        "bullish_stats": _stats(bull),
+        "bearish_stats": _stats(bear),
+        "directional_stats": _stats(directional),
+        "correlation_score_vs_directional_return": corr,
+        "score_buckets": buckets,
+        "signal_time_field": "close_time",
+        "notes": (
+            "Backtest score is NOT the live score: historical OI "
+            "and funding are not available via the public Binance "
+            "API, so those two components are intentionally omitted. "
+            "Entry is taken at the signal candle close (close[i]); "
+            "no slippage, fees, spread or latency are modelled."
+        ),
+    }
+
+
+# ============================================================
+# DISPLAY
+# ============================================================
+
+def _fmt(v, width, prec=2, default="n/a"):
+    if v is None:
+        return f"{default:>{width}}"
+    return f"{v:>{width}.{prec}f}"
+
+
+def display(df):
+    print("=" * 145)
+    print("                         TOP MARKET CANDIDATES")
+    print("=" * 145)
+
+    for index, (_, row) in enumerate(df.iterrows(), start=1):
+        change_arrow = "^" if row["change"] >= 0 else "v"
+        momentum_arrow = "^" if row["momentum_1h"] >= 0 else "v"
+        oi_str = (
+            f"{row['oi_change']:>6.2f}%"
+            if row.get("oi_change") is not None else f"{'n/a':>7}"
+        )
+        f_str = (
+            f"{row['funding']:>7.3f}%"
+            if row.get("funding") is not None else f"{'n/a':>8}"
+        )
+
+        print(
+            f"{index:02d}. "
+            f"{row['symbol']:<16} "
+            f"{change_arrow}{row['change']:>7.2f}%  "
+            f"1H {momentum_arrow}{row['momentum_1h']:>6.2f}%  "
+            f"4H {row['momentum_4h']:>6.2f}%  "
+            f"RSI {row['rsi']:>5.1f}  "
+            f"RV {row['relative_volume']:>4.1f}x  "
+            f"OI \u0394~{OI_WINDOW_SPAN_MIN}m {oi_str}  "
+            f"F {f_str}  "
+            f"S {row['score']:>3.0f}  "
+            f"{row['classification']}"
+        )
+
+    print("=" * 145)
+    print()
+    print("LEGEND")
+    print("-" * 50)
+    print("24H      = Binance Futures 24-hour price change")
+    print("1H       = Approximate 1-hour momentum")
+    print("4H       = Approximate 4-hour momentum")
+    print("RSI      = 14-period RSI on 15-minute candles")
+    print("RV       = Latest CLOSED 15m candle / avg of previous 20 closed")
+    print(f"OI \u0394~{OI_WINDOW_SPAN_MIN}m = Approx. {OI_WINDOW_SPAN_MIN}-min Open Interest change "
+          f"({OI_WINDOW_PERIOD} x {OI_WINDOW_LIMIT} samples), n/a if unavailable")
+    print("F        = Latest Funding Rate (n/a if unavailable)")
+    print("S        = ACTIVITY score /100 (not a directional prediction)")
+    print("=" * 145)
+    print("This scanner is for market research.")
+    print("It does not predict price direction and does not execute trades.")
+    print("=" * 145)
+
+
+def display_backtest(summary):
+    if summary is None:
+        print("\nBacktest: no data.")
+        return
+
+    print()
+    print("=" * 100)
+    print(f"  BACKTEST - score vs directional forward return "
+          f"(horizon {summary['horizon_candles']} candles "
+          f"= {summary['horizon_hours']:.0f}h)")
+    print("=" * 100)
+
+    print(f"Total samples     : {summary['total_samples']}")
+    print(f"  Bullish samples : {summary['bullish_samples']}")
+    print(f"  Bearish samples : {summary['bearish_samples']}")
+    print(f"  Neutral samples : {summary['neutral_samples']}")
+    print(f"Signal timestamp  : {summary['signal_time_field']} "
+          f"(candle close)")
+
+    print()
+    print("DIRECTIONAL STATISTICS")
+    print("-" * 100)
+    print(f"{'Group':<14} {'N':>7} {'Avg ret%':>10} {'Med ret%':>10} "
+          f"{'Win%':>7} {'Std%':>7}")
+    print("-" * 100)
+
+    for name, key in [
+        ("Bullish", "bullish_stats"),
+        ("Bearish", "bearish_stats"),
+        ("Directional", "directional_stats"),
+    ]:
+        s = summary[key]
+        print(
+            f"{name:<14} "
+            f"{s['count']:>7} "
+            f"{_fmt(s['avg'], 10)} "
+            f"{_fmt(s['median'], 10)} "
+            f"{_fmt(s['win_rate'], 7, 1)} "
+            f"{_fmt(s['std'], 7)}"
+        )
+
+    print()
+    print("BY SCORE BUCKET (directional samples only)")
+    print("-" * 100)
+    print(f"{'Score bucket':<15} {'N':>7} {'Avg ret%':>10} "
+          f"{'Med ret%':>10} {'Win%':>7} {'Std%':>7}")
+    print("-" * 100)
+
+    for b in summary["score_buckets"]:
+        print(
+            f"{b['bucket']:<15} "
+            f"{b['count']:>7} "
+            f"{_fmt(b['avg_signal_return'], 10)} "
+            f"{_fmt(b['median_signal_return'], 10)} "
+            f"{_fmt(b['win_rate'], 7, 1)} "
+            f"{_fmt(b['std'], 7)}"
+        )
+
+    corr = summary["correlation_score_vs_directional_return"]
+    print()
+    if corr is None:
+        print("Pearson correlation (score vs directional return): n/a")
+    else:
+        print(f"Pearson correlation (score vs directional return): "
+              f"{corr:.3f}")
+
+    print()
+    print("=" * 100)
+    print("NOTE: backtest score is NOT the live score. Historical OI")
+    print("and funding are not available via the public Binance API,")
+    print("so those two components are intentionally omitted.")
+    print("Entry is the signal candle close (close[i]); no slippage,")
+    print("fees, spread or latency are modelled.")
+    print("=" * 100)
+    print("A high score is not proof of future profitability.")
+    print("This backtest is a research tool, not a trading system.")
+    print("=" * 100)
+
+
+# ============================================================
+# JSON SANITIZATION
+# ============================================================
+
+def sanitize(obj):
+    """Recursively convert numpy / pandas / NaN / Inf to JSON-safe values."""
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        f = float(obj)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if obj is None or obj is pd.NA or obj is pd.NaT:
+        return None
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return obj
+
+
+def build_json_output(df, bt_summary=None):
+    output = {
+        "scan_time": datetime.now().isoformat(timespec="seconds"),
+        "top_n": TOP_N,
+        "min_volume_usdt": MIN_VOLUME_USDT,
+        "score_type": "activity_confluence",
+        "oi_change_window": {
+            "period": OI_WINDOW_PERIOD,
+            "samples": OI_WINDOW_LIMIT,
+            "approx_span_minutes": OI_WINDOW_SPAN_MIN,
+            "note": (
+                "first-to-last observation span = "
+                "(samples - 1) * period = 25 minutes"
+            ),
+        },
+        "results": df.to_dict(orient="records"),
+    }
+    if bt_summary is not None:
+        output["backtest"] = bt_summary
+    return output
+
+
+# ============================================================
+# CLI
+# ============================================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="KORIVA Crypto Scanner V2.1 - Binance USDT-M Perpetuals",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python scanner_v2.py\n"
+            "  python scanner_v2.py --json | jq .\n"
+            "  python scanner_v2.py --backtest\n"
+            "  python scanner_v2.py --json --backtest --backtest-top 10 "
+            "--horizon 96\n"
+        ),
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Output results as JSON (progress goes to stderr).",
+    )
+    parser.add_argument(
+        "--backtest", action="store_true",
+        help="Run a directional forward-return backtest on the top symbols.",
+    )
+    parser.add_argument(
+        "--backtest-top", type=int, default=10,
+        help="Number of top scanned symbols to backtest (default: 10).",
+    )
+    parser.add_argument(
+        "--horizon", type=int, default=BACKTEST_HORIZON,
+        help="Forward horizon in 15m candles (default: 96 = 24h).",
+    )
+    return parser.parse_args()
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+    global VERBOSE
+    args = parse_args()
+    VERBOSE = not args.json
+
+    try:
+        dataframe = scan()
+
+        if dataframe is None:
+            if args.json:
+                print(json.dumps(
+                    {"error": "No suitable markets found."},
+                    indent=2,
+                ))
+            sys.exit(1)
+
+        bt_summary = None
+        if args.backtest:
+            n_top = max(1, min(args.backtest_top, len(dataframe)))
+            symbols = dataframe["symbol"].head(n_top).tolist()
+
+            bt_df = backtest(
+                symbols,
+                horizon=args.horizon,
+                step=BACKTEST_STEP,
+            )
+            bt_summary = summarize_backtest(bt_df, args.horizon)
+
+        if args.json:
+            payload = build_json_output(dataframe, bt_summary)
+            print(json.dumps(
+                sanitize(payload),
+                indent=2,
+                allow_nan=False,
+                default=str,
+            ))
+        else:
+            display(dataframe)
+            if bt_summary is not None:
+                display_backtest(bt_summary)
+
+    except requests.RequestException as error:
+        if args.json:
+            print(json.dumps({"error": str(error)}, indent=2))
+        else:
+            print()
+            print("Binance API connection error:")
+            print(error)
+        sys.exit(2)
+
+    except KeyboardInterrupt:
+        if not args.json:
+            print()
+            print("Scan interrupted by user.")
+        sys.exit(130)
+
+    except Exception as error:
+        if args.json:
+            print(json.dumps(
+                {"error": f"{type(error).__name__}: {error}"},
+                indent=2,
+            ))
+        else:
+            print()
+            print("Unexpected error:")
+            print(type(error).__name__, error)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
