@@ -25,6 +25,7 @@
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from datetime import datetime
@@ -66,11 +67,35 @@ def log(msg="", end="\n"):
 
 
 # ============================================================
-# HTTP SESSION + RETRY
+# HTTP SESSION + PROXY + RETRY
 # ============================================================
+
+# Proxy resolution order:
+#   1. BINANCE_PROXY  (dedicated, recommended on GitHub Actions)
+#   2. HTTPS_PROXY    (standard env var, often auto-set)
+#   3. HTTP_PROXY     (standard env var, often auto-set)
+#
+# Accepted formats:
+#   http://user:pass@host:port
+#   socks5://user:pass@host:port   (requires: pip install requests[socks])
+PROXY_URL = (
+    os.environ.get("BINANCE_PROXY")
+    or os.environ.get("HTTPS_PROXY")
+    or os.environ.get("HTTP_PROXY")
+    or os.environ.get("https_proxy")
+    or os.environ.get("http_proxy")
+)
 
 session = requests.Session()
 session.headers.update({"User-Agent": "KORIVA-Crypto-Scanner/2.1"})
+
+if PROXY_URL:
+    session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
+    # Never print credentials: keep only the part after '@' if present.
+    _safe_proxy = PROXY_URL.split("@")[-1]
+    log(f"[KORIVA] Proxy enabled -> {_safe_proxy}")
+else:
+    log("[KORIVA] No proxy configured (using direct connection).")
 
 
 def get_json(endpoint, params=None, max_retries=5):
@@ -80,7 +105,8 @@ def get_json(endpoint, params=None, max_retries=5):
       - HTTP 429 (rate limit) -> respects Retry-After header
       - HTTP 5xx (server errors)
 
-    HTTP 418 (IP ban) is fatal and raised immediately.
+    HTTP 418 (IP ban) and HTTP 451 (geo-block) are fatal and
+    raised immediately with an explicit message.
 
     On final failure, raises HTTPError with a clear description
     of the last observed error (never 'last_exc = None').
@@ -114,6 +140,18 @@ def get_json(endpoint, params=None, max_retries=5):
             raise requests.HTTPError(
                 f"418 IP banned by Binance for {endpoint}: "
                 f"{response.text[:200]}"
+            )
+
+        # ----- Geo-block (fatal) -----
+        # Binance returns 451 from US IPs (GitHub Actions runners
+        # are US-based). A proxy or a non-US runner is required.
+        if response.status_code == 451:
+            raise requests.HTTPError(
+                f"451 Geo-blocked by Binance for {endpoint}: "
+                f"this IP is in a restricted region (HTTP 451). "
+                f"Configure BINANCE_PROXY with a non-US proxy, "
+                f"or use a self-hosted runner outside the US. "
+                f"Body: {response.text[:200]}"
             )
 
         # ----- Server errors -----
