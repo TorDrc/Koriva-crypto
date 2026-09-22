@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KORIVA">
+<meta name="theme-color" content="#0a0a0a">
+<title>KORIVA Scanner</title>
+<style>
+:root{
+  --bg:#0a0a0a;--bg2:#141414;--bg3:#1c1c1e;--bd:#2a2a2e;
+  --tx:#f2f2f7;--td:#8e8e93;--tf:#636366;
+  --gn:#30d158;--rd:#ff453a;--yl:#ffd60a;--or:#ff9f0a;--bl:#0a84ff;
+  --st:env(safe-area-inset-top,0);--sb:env(safe-area-inset-bottom,0);
+  --sl:env(safe-area-inset-left,0);--sr:env(safe-area-inset-right,0);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;
+  font-size:15px;line-height:1.4;min-height:100vh}
+body{padding:calc(var(--st) + 8px) calc(var(--sr) + 12px)
+     calc(var(--sb) + 20px) calc(var(--sl) + 12px)}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+h1{font-size:22px;font-weight:700;margin:0;letter-spacing:-.3px}
+h1 span{color:var(--bl)}
+.sub{font-size:12px;color:var(--td);margin-top:2px}
+.icon-btn{background:var(--bg3);border:1px solid var(--bd);color:var(--tx);
+  width:40px;height:40px;border-radius:12px;font-size:18px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+.icon-btn:active{transform:scale(.94);background:var(--bg2)}
+.icon-btn.spinning{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.status{font-size:12px;color:var(--td);margin-bottom:10px;min-height:16px}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--gn);margin-right:6px;vertical-align:middle}
+.dot.busy{background:var(--or);animation:pulse 1s infinite}
+.dot.err{background:var(--rd)}
+@keyframes pulse{50%{opacity:.3}}
+.chips{display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;background:var(--bg3);border:1px solid var(--bd);color:var(--td);
+  padding:6px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.chip.active{background:var(--bl);color:#fff;border-color:var(--bl)}
+.cards{display:flex;flex-direction:column;gap:10px}
+.card{background:var(--bg2);border:1px solid var(--bd);border-radius:14px;
+  padding:12px 14px;position:relative;overflow:hidden;animation:fi .25s ease-out both}
+@keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--tf)}
+.card.bull::before{background:var(--gn)}
+.card.bear::before{background:var(--rd)}
+.card-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.sym{font-size:16px;font-weight:700;letter-spacing:-.2px}
+.rank{color:var(--tf);font-weight:600;font-size:12px;margin-right:6px}
+.score{font-size:13px;font-weight:700;padding:3px 8px;border-radius:8px;background:var(--bg3)}
+.score.s80{background:var(--gn);color:#000}
+.score.s60{background:var(--bl);color:#fff}
+.score.s40{background:var(--yl);color:#000}
+.score.s20{background:var(--or);color:#000}
+.score.s0{background:var(--tf);color:#fff}
+.row{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:13px;color:var(--td);margin-top:2px}
+.row .k{color:var(--tf);font-size:11px}
+.row .v{color:var(--tx);font-weight:600}
+.row .v.up{color:var(--gn)}
+.row .v.dn{color:var(--rd)}
+.tag{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;
+  padding:3px 8px;border-radius:999px;background:var(--bg3);color:var(--td);letter-spacing:.2px}
+.tag.bull{background:rgba(48,209,88,.15);color:var(--gn)}
+.tag.bear{background:rgba(255,69,58,.15);color:var(--rd)}
+.panel{background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:10px}
+.panel h2{margin:0 0 10px;font-size:15px;font-weight:700}
+.kv{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bd);font-size:13px}
+.kv:last-child{border-bottom:none}
+.kv .k{color:var(--td)}
+.kv .v{color:var(--tx);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.stat{background:var(--bg3);border-radius:10px;padding:10px}
+.stat .lbl{font-size:11px;color:var(--tf);text-transform:uppercase;letter-spacing:.5px}
+.stat .val{font-size:18px;font-weight:700;margin-top:2px}
+.stat .val.up{color:var(--gn)}
+.stat .val.dn{color:var(--rd)}
+.bucket{display:grid;grid-template-columns:60px 1fr 50px 60px;gap:8px;
+  align-items:center;padding:6px 0;border-bottom:1px solid var(--bd);font-size:12px}
+.bucket:last-child{border-bottom:none}
+.bucket .b{color:var(--td);font-weight:600}
+.bucket .n{color:var(--tf);font-size:11px;text-align:right}
+.bucket .r{text-align:right;font-weight:600}
+.bucket .r.up{color:var(--gn)}
+.bucket .r.dn{color:var(--rd)}
+.bucket .bar{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.bucket .bar i{display:block;height:100%;background:var(--bl)}
+.empty{text-align:center;padding:40px 20px;color:var(--tf);font-size:14px}
+.sp{display:inline-block;width:14px;height:14px;border:2px solid var(--tf);
+  border-top-color:var(--bl);border-radius:50%;animation:spin .8s linear infinite;
+  margin-right:6px;vertical-align:middle}
+footer{text-align:center;color:var(--tf);font-size:11px;margin-top:20px;padding:10px 0}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>KORIVA <span>Scanner</span></h1>
+    <div class="sub" id="sub">Binance USDT-M Perpetuals</div>
+  </div>
+  <button class="icon-btn" id="refresh-btn" aria-label="Refresh">&#x21bb;</button>
+</header>
+
+<div class="status"><span class="dot" id="dot"></span><span id="status-text">Loading…</span></div>
+
+<div class="chips" id="sort-chips">
+  <div class="chip active" data-sort="score">Score</div>
+  <div class="chip" data-sort="change">24h %</div>
+  <div class="chip" data-sort="momentum_1h">1H %</div>
+  <div class="chip" data-sort="relative_volume">RV</div>
+  <div class="chip" data-sort="oi_change">OI</div>
+  <div class="chip" data-sort="symbol">Symbol</div>
+</div>
+
+<div class="cards" id="cards"><div class="empty">Loading data…</div></div>
+
+<footer>Research tool only. Not a prediction. No trades executed.</footer>
+
+<script>
+(function(){
+"use strict";
+const $ = s => document.querySelector(s);
+let data = null, sortKey = "score", sortDesc = true;
+
+function setStatus(text, mode){
+  const d = $("#dot"); d.classList.remove("busy","err");
+  if (mode === "busy") d.classList.add("busy");
+  if (mode === "err") d.classList.add("err");
+  $("#status-text").textContent = text;
+}
+function fmtPct(v, d){ d = d || 2; if (v==null||!isFinite(v)) return "n/a";
+  return (v>=0?"+":"")+v.toFixed(d)+"%"; }
+function fmtNum(v, d){ d = d || 2; if (v==null||!isFinite(v)) return "n/a"; return v.toFixed(d); }
+function fmtTime(iso){
+  if (!iso) return "-";
+  try { const dt = new Date(iso); if (isNaN(dt.getTime())) return iso;
+    return dt.toLocaleString();
+  } catch(e){ return iso; }
+}
+function scoreCls(s){
+  if (s>=80) return "s80"; if (s>=60) return "s60";
+  if (s>=40) return "s40"; if (s>=20) return "s20"; return "s0";
+}
+function dirCls(c){
+  const u = (c||"").toUpperCase();
+  if (u.indexOf("BULL")>=0||u.indexOf("UPTREND")>=0||u.indexOf("RALLY")>=0) return "bull";
+  if (u.indexOf("BEAR")>=0||u.indexOf("DOWNTREND")>=0||u.indexOf("SELL")>=0) return "bear";
+  return "neutral";
+}
+function sortRows(rows){
+  const c = rows.slice();
+  c.sort((a,b)=>{
+    let av=a[sortKey], bv=b[sortKey];
+    if (sortKey === "symbol"){
+      av=String(av); bv=String(bv);
+      return sortDesc ? bv.localeCompare(av) : av.localeCompare(bv);
+    }
+    av = (av==null) ? -Infinity : av;
+    bv = (bv==null) ? -Infinity : bv;
+    return sortDesc ? bv-av : av-bv;
+  });
+  return c;
+}
+function cardHtml(r, rank){
+  const c=r.change, cc=c>=0?"up":"dn";
+  const m1=r.momentum_1h, mc1=m1>=0?"up":"dn";
+  const m4=r.momentum_4h, mc4=m4>=0?"up":"dn";
+  const oiS = (r.oi_change==null) ? "n/a" : ((r.oi_change>=0?"+":"")+r.oi_change.toFixed(2)+"%");
+  const fS  = (r.funding==null)   ? "n/a" : ((r.funding>=0?"+":"")+r.funding.toFixed(3)+"%");
+  const sc = Number(r.score);
+  const dc = dirCls(r.classification);
+  const cc2 = dc==="bull" ? "bull" : dc==="bear" ? "bear" : "";
+  return '<div class="card '+cc2+'">'
+    +'<div class="card-top"><div class="sym"><span class="rank">#'+rank+'</span>'+r.symbol+'</div>'
+    +'<div class="score '+scoreCls(sc)+'">'+sc+'</div></div>'
+    +'<div class="row"><div><span class="k">24H </span><span class="v '+cc+'">'+fmtPct(c,2)+'</span></div>'
+    +'<div><span class="k">1H </span><span class="v '+mc1+'">'+fmtPct(m1,2)+'</span></div>'
+    +'<div><span class="k">4H </span><span class="v '+mc4+'">'+fmtPct(m4,2)+'</span></div></div>'
+    +'<div class="row"><div><span class="k">RSI </span><span class="v">'+fmtNum(r.rsi,1)+'</span></div>'
+    +'<div><span class="k">RV </span><span class="v">'+fmtNum(r.relative_volume,2)+'x</span></div>'
+    +'<div><span class="k">OI~25m </span><span class="v">'+oiS+'</span></div>'
+    +'<div><span class="k">F </span><span class="v">'+fS+'</span></div></div>'
+    +'<span class="tag '+dc+'">'+(r.classification||"NEUTRAL")+'</span></div>';
+}
+function render(){
+  const wrap = $("#cards");
+  if (!data || !data.results || !data.results.length){
+    wrap.innerHTML = '<div class="empty">No data yet. Wait for the next GitHub Actions run.</div>';
+    return;
+  }
+  const rows = sortRows(data.results);
+  wrap.innerHTML = rows.map((r,i)=>cardHtml(r,i+1)).join("");
+}
+async function load(){
+  setStatus("Loading…", "busy");
+  try {
+    const r = await fetch("data.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    data = await r.json();
+    if (data.error){
+      setStatus("Scanner error: " + data.error, "err");
+    } else {
+      const n = (data.results||[]).length;
+      setStatus("Updated " + fmtTime(data.scan_time) + " · " + n + " markets", "ok");
+    }
+    render();
+  } catch(e){
+    setStatus("Failed to load data.json: " + (e.message||e), "err");
+  }
+}
+document.querySelectorAll("#sort-chips .chip").forEach(c => {
+  c.addEventListener("click", () => {
+    const k = c.dataset.sort;
+    if (k === sortKey) sortDesc = !sortDesc;
+    else { sortKey = k; sortDesc = (k !== "symbol"); }
+    document.querySelectorAll("#sort-chips .chip").forEach(x => x.classList.remove("active"));
+    c.classList.add("active");
+    render();
+  });
+});
+$("#refresh-btn").addEventListener("click", () => {
+  const b = $("#refresh-btn");
+  b.classList.add("spinning");
+  setTimeout(()=>b.classList.remove("spinning"), 800);
+  load();
+});
+load();
+// auto-refresh every 5 minutes
+setInterval(load, 5 * 60 * 1000);
+})();
+</script>
+</body>
+</html>
