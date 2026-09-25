@@ -1,4 +1,4 @@
- # ============================================================
+# ============================================================
 # KORIVA CRYPTO SCANNER V2.1
 # Binance USDT-M Perpetual Futures
 # Public API - No API key required
