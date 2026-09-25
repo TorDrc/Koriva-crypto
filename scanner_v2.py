@@ -39,7 +39,17 @@ import requests
 # CONSTANTS
 # ============================================================
 
-BASE_URL = "https://fapi.binance.com"
+# BASE_URL resolution order:
+#   1. BINANCE_API_BASE  (a reverse proxy in front of Binance,
+#      e.g. a Cloudflare Worker, useful when the runner's IP is
+#      geo-blocked by Binance with HTTP 451)
+#   2. https://fapi.binance.com (default, direct connection)
+#
+# A reverse-proxy base URL is different from an HTTP forward
+# proxy: here the *hostname itself* changes, and the proxy
+# server is expected to forward the request path/query as-is
+# to fapi.binance.com and return the raw response body.
+BASE_URL = os.environ.get("BINANCE_API_BASE", "https://fapi.binance.com").rstrip("/")
 
 TOP_N = 20
 MIN_VOLUME_USDT = 5_000_000
@@ -67,35 +77,44 @@ def log(msg="", end="\n"):
 
 
 # ============================================================
-# HTTP SESSION + PROXY + RETRY
+# HTTP SESSION
 # ============================================================
-
-# Proxy resolution order:
-#   1. BINANCE_PROXY  (dedicated, recommended on GitHub Actions)
-#   2. HTTPS_PROXY    (standard env var, often auto-set)
-#   3. HTTP_PROXY     (standard env var, often auto-set)
 #
-# Accepted formats:
-#   http://user:pass@host:port
-#   socks5://user:pass@host:port   (requires: pip install requests[socks])
-PROXY_URL = (
-    os.environ.get("BINANCE_PROXY")
-    or os.environ.get("HTTPS_PROXY")
-    or os.environ.get("HTTP_PROXY")
-    or os.environ.get("https_proxy")
-    or os.environ.get("http_proxy")
-)
+# NOTE ON REVERSE-PROXY MODE:
+# When BINANCE_API_BASE is set (e.g. to a Cloudflare Worker
+# URL), requests are sent directly to that host instead of
+# fapi.binance.com, and no HTTP forward-proxy is configured on
+# the session. This is the correct setup for a Worker-style
+# reverse proxy, which listens on its own hostname and forwards
+# the request server-side.
+#
+# A classic HTTP/SOCKS forward proxy (BINANCE_PROXY /
+# HTTPS_PROXY / HTTP_PROXY) is still supported as an
+# alternative and takes effect only when BINANCE_API_BASE is
+# NOT set, since the two approaches are mutually exclusive.
 
 session = requests.Session()
 session.headers.update({"User-Agent": "KORIVA-Crypto-Scanner/2.1"})
 
-if PROXY_URL:
-    session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
-    # Never print credentials: keep only the part after '@' if present.
-    _safe_proxy = PROXY_URL.split("@")[-1]
-    log(f"[KORIVA] Proxy enabled -> {_safe_proxy}")
+USING_API_BASE_OVERRIDE = "BINANCE_API_BASE" in os.environ
+
+if USING_API_BASE_OVERRIDE:
+    log(f"[KORIVA] Using reverse-proxy base URL -> {BASE_URL}")
 else:
-    log("[KORIVA] No proxy configured (using direct connection).")
+    PROXY_URL = (
+        os.environ.get("BINANCE_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("http_proxy")
+    )
+    if PROXY_URL:
+        session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
+        # Never print credentials: keep only the part after '@' if present.
+        _safe_proxy = PROXY_URL.split("@")[-1]
+        log(f"[KORIVA] Proxy enabled -> {_safe_proxy}")
+    else:
+        log("[KORIVA] No proxy configured (using direct connection).")
 
 
 def get_json(endpoint, params=None, max_retries=5):
@@ -144,13 +163,15 @@ def get_json(endpoint, params=None, max_retries=5):
 
         # ----- Geo-block (fatal) -----
         # Binance returns 451 from US IPs (GitHub Actions runners
-        # are US-based). A proxy or a non-US runner is required.
+        # are US-based). A reverse-proxy base URL (BINANCE_API_BASE)
+        # or a classic proxy is required.
         if response.status_code == 451:
             raise requests.HTTPError(
                 f"451 Geo-blocked by Binance for {endpoint}: "
                 f"this IP is in a restricted region (HTTP 451). "
-                f"Configure BINANCE_PROXY with a non-US proxy, "
-                f"or use a self-hosted runner outside the US. "
+                f"Set BINANCE_API_BASE to a reverse proxy (e.g. a "
+                f"Cloudflare Worker) in a non-US region, or configure "
+                f"BINANCE_PROXY with a non-US proxy. "
                 f"Body: {response.text[:200]}"
             )
 
