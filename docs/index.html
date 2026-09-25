@@ -1,4 +1,4 @@
-<!doctype html>
+ <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -114,6 +114,7 @@ footer{text-align:center;color:var(--tf);font-size:11px;margin-top:20px;padding:
   <div class="chip" data-sort="change">24h %</div>
   <div class="chip" data-sort="momentum_1h">1H %</div>
   <div class="chip" data-sort="relative_volume">RV</div>
+  <div class="chip" data-sort="volume">Volume</div>
   <div class="chip" data-sort="oi_change">OI</div>
   <div class="chip" data-sort="symbol">Symbol</div>
 </div>
@@ -137,6 +138,13 @@ function setStatus(text, mode){
 function fmtPct(v, d){ d = d || 2; if (v==null||!isFinite(v)) return "n/a";
   return (v>=0?"+":"")+v.toFixed(d)+"%"; }
 function fmtNum(v, d){ d = d || 2; if (v==null||!isFinite(v)) return "n/a"; return v.toFixed(d); }
+function fmtVolume(v){
+  if (v==null||!isFinite(v)) return "n/a";
+  if (v >= 1e9) return (v/1e9).toFixed(2)+"B";
+  if (v >= 1e6) return (v/1e6).toFixed(2)+"M";
+  if (v >= 1e3) return (v/1e3).toFixed(2)+"K";
+  return v.toFixed(0);
+}
 function fmtTime(iso){
   if (!iso) return "-";
   try { const dt = new Date(iso); if (isNaN(dt.getTime())) return iso;
@@ -173,6 +181,7 @@ function cardHtml(r, rank){
   const m4=r.momentum_4h, mc4=m4>=0?"up":"dn";
   const oiS = (r.oi_change==null) ? "n/a" : ((r.oi_change>=0?"+":"")+r.oi_change.toFixed(2)+"%");
   const fS  = (r.funding==null)   ? "n/a" : ((r.funding>=0?"+":"")+r.funding.toFixed(3)+"%");
+  const volS = fmtVolume(r.volume);
   const sc = Number(r.score);
   const dc = dirCls(r.classification);
   const cc2 = dc==="bull" ? "bull" : dc==="bear" ? "bear" : "";
@@ -184,7 +193,8 @@ function cardHtml(r, rank){
     +'<div><span class="k">4H </span><span class="v '+mc4+'">'+fmtPct(m4,2)+'</span></div></div>'
     +'<div class="row"><div><span class="k">RSI </span><span class="v">'+fmtNum(r.rsi,1)+'</span></div>'
     +'<div><span class="k">RV </span><span class="v">'+fmtNum(r.relative_volume,2)+'x</span></div>'
-    +'<div><span class="k">OI~25m </span><span class="v">'+oiS+'</span></div>'
+    +'<div><span class="k">Vol </span><span class="v">$'+volS+'</span></div></div>'
+    +'<div class="row"><div><span class="k">OI~25m </span><span class="v">'+oiS+'</span></div>'
     +'<div><span class="k">F </span><span class="v">'+fS+'</span></div></div>'
     +'<span class="tag '+dc+'">'+(r.classification||"NEUTRAL")+'</span></div>';
 }
